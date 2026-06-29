@@ -2585,6 +2585,35 @@ export class JellyfinPlayer extends EventEmitter {
         // Deep clone the device profile so we can mutilate it to trick the server without affecting future calls
         const clonedProfile = JSON.parse(JSON.stringify(deviceProfile || buildJellyfinProfile(maxBitrate)));
 
+        // Emby Server profile matching workaround:
+        // Emby's StreamBuilder selects the first matching HLS video transcoding profile in the list
+        // and does not verify if the file's video codec is supported by that container before selection.
+        // If the item's video codec is AV1 or VP9 (which MPEG-TS cannot carry), we reorder fMP4 HLS
+        // transcoding profiles to the front so Emby selects fMP4 instead of defaulting to MPEG-TS.
+        if (api.isEmby() && clonedProfile.TranscodingProfiles) {
+            const fallbackSource = options.item?.MediaSources?.[0];
+            const mediaSource = options.item?.MediaSources?.find((m) => m.Id === options.mediaSourceId) || fallbackSource;
+            const videoStream = mediaSource?.MediaStreams?.find((s) => s.Type === 'Video');
+            const videoCodec = videoStream?.Codec?.toLowerCase();
+
+            if (videoCodec === 'av1' || videoCodec === 'vp9') {
+                const fmp4Profiles = [];
+                const otherProfiles = [];
+                for (const tcProfile of clonedProfile.TranscodingProfiles) {
+                    if (
+                        tcProfile.Type === 'Video' &&
+                        tcProfile.Protocol === 'hls' &&
+                        tcProfile.Container === 'mp4'
+                    ) {
+                        fmp4Profiles.push(tcProfile);
+                    } else {
+                        otherProfiles.push(tcProfile);
+                    }
+                }
+                clonedProfile.TranscodingProfiles = [...fmp4Profiles, ...otherProfiles];
+            }
+        }
+
 
 
         const requestBody = {
