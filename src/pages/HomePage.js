@@ -471,7 +471,7 @@ class HomePage extends Page {
                                     .getPlaylistItems(settingVal, { Limit: homeRowLimit })
                                     .catch(() => null);
                                 items = plRes?.Items;
-                            } catch (_) { }
+                            } catch (_) {}
 
                             if (!items || items.length === 0) {
                                 const boxRes = await api.getItems({
@@ -496,11 +496,11 @@ class HomePage extends Page {
                                 type === 'Movie'
                                     ? [/filmes?\s*em\s*alta/i, /em\s*alta/i, /trending.*movies?/i, /trending/i]
                                     : [
-                                        /s[eé]ries?\s*em\s*alta/i,
-                                        /tv.*trending/i,
-                                        /trending.*shows?/i,
-                                        /trending.*series/i
-                                    ];
+                                          /s[eé]ries?\s*em\s*alta/i,
+                                          /tv.*trending/i,
+                                          /trending.*shows?/i,
+                                          /trending.*series/i
+                                      ];
 
                             let smartCollection = null;
                             for (const pattern of keywords) {
@@ -2302,6 +2302,10 @@ class HomePage extends Page {
             const fields =
                 'Overview,ImageTags,ProductionYear,RunTimeTicks,OfficialRating,CommunityRating,ParentLogoImageTag,ParentLogoItemId,SeriesId,ProviderIds,MediaSourceCount';
             const imageTypes = 'Primary,Backdrop,Logo';
+            // Emby 4.7 expects ImageTypes=Backdrop here. Preserve the existing
+            // HasBackdrop query for Jellyfin and newer Emby releases.
+            const useLegacyEmbyBackdropQuery = api.isEmby47();
+            const backdropQuery = useLegacyEmbyBackdropQuery ? { ImageTypes: 'Backdrop' } : { Filters: 'HasBackdrop' };
 
             let items = [];
 
@@ -2318,7 +2322,8 @@ class HomePage extends Page {
                     Fields: fields,
                     EnableImageTypes: imageTypes,
                     IncludeItemTypes: 'Movie',
-                    Filters: 'HasBackdrop,IsUnplayed'
+                    ...backdropQuery,
+                    Filters: useLegacyEmbyBackdropQuery ? 'IsUnplayed' : 'HasBackdrop,IsUnplayed'
                 });
 
                 if (!this._isMounted) return;
@@ -2333,7 +2338,7 @@ class HomePage extends Page {
                     Fields: `${fields},UserData`,
                     EnableImageTypes: imageTypes,
                     IncludeItemTypes: 'Series',
-                    Filters: 'HasBackdrop'
+                    ...backdropQuery
                 });
 
                 if (!this._isMounted) return;
@@ -2354,7 +2359,7 @@ class HomePage extends Page {
                     Fields: fields,
                     EnableImageTypes: imageTypes,
                     IncludeItemTypes: 'Movie,Series',
-                    Filters: 'HasBackdrop'
+                    ...backdropQuery
                 });
 
                 if (!this._isMounted) return;

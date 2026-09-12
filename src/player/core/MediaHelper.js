@@ -15,6 +15,24 @@ import { storage } from '../../utils/StorageService.js';
 import { platformInfo } from '../../utils/PlatformInfo.js';
 import { state } from '../../core/StateManager.js';
 
+function qualifyServerUrl(serverUrl, path) {
+    return /^https?:\/\//i.test(path) ? path : serverUrl + path;
+}
+
+function setQueryParameter(url, name, value) {
+    const encodedValue = encodeURIComponent(value);
+    const pattern = new RegExp(`([?&])${name}=[^&#]*`, 'i');
+
+    if (pattern.test(url)) {
+        return url.replace(pattern, `$1${name}=${encodedValue}`);
+    }
+
+    const hashIndex = url.indexOf('#');
+    const base = hashIndex === -1 ? url : url.slice(0, hashIndex);
+    const hash = hashIndex === -1 ? '' : url.slice(hashIndex);
+    return `${base}${base.includes('?') ? '&' : '?'}${name}=${encodedValue}${hash}`;
+}
+
 export const MediaHelper = {
     /**
      * Build stream URL for playback
@@ -38,6 +56,10 @@ export const MediaHelper = {
          */
         const serverInfo = state.get('server:info') || {};
         const isEmbyInstance = !!(serverInfo.ServerName && (!serverInfo.ProductName || serverInfo.ProductName.toLowerCase().includes('emby')));
+        const [serverMajor, serverMinor] = String(serverInfo.Version || '')
+            .split('.')
+            .map((part) => parseInt(part, 10));
+        const isEmby47 = isEmbyInstance && serverMajor === 4 && serverMinor === 7;
         const authKey = isEmbyInstance ? 'api_key' : 'ApiKey';
 
         // Determine play method
@@ -143,6 +165,20 @@ export const MediaHelper = {
             // ----------------------------------------------------------------
             } else if (mediaSource.IsRemote && mediaSource.Protocol === 'Http' && mediaSource.Path) {
                 url = mediaSource.Path;
+                isHls = url.includes('.m3u8') || mediaSource.Container === 'hls';
+
+                // Emby PlaybackInfo returns the exact original-media endpoint that
+                // supports byte-range seeking for this source. This is especially
+                // important on Emby 4.7, where the generic stream.* static alias can
+                // play from zero but stall when AVPlay performs the resume range seek.
+            } else if (isEmby47 && playMethod === 'DirectPlay' && mediaSource.DirectStreamUrl) {
+                url = qualifyServerUrl(serverUrl, mediaSource.DirectStreamUrl);
+                if (authToken) {
+                    url = setQueryParameter(url, authKey, authToken);
+                }
+                if (playSessionId) {
+                    url = setQueryParameter(url, 'PlaySessionId', playSessionId);
+                }
                 isHls = url.includes('.m3u8') || mediaSource.Container === 'hls';
 
             // For DirectStream, always prefer the server-provided TranscodingUrl —

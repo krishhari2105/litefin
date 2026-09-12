@@ -22,6 +22,33 @@ import { escapeHtml } from '../utils/Utils.js';
 
 const log = logger.create('HeroCarousel');
 
+/**
+ * Resolve the owner and cache tag for a hero backdrop across standard
+ * Jellyfin/Emby DTOs and Litefin plugin responses.
+ *
+ * @param {Object} item
+ * @param {boolean} useLegacyEmbyFields
+ * @returns {{ itemId: string, tag: string|null }|null}
+ */
+export function resolveHeroBackdrop(item, useLegacyEmbyFields = false) {
+    if (!item) return null;
+
+    const ownTag = useLegacyEmbyFields
+        ? item.BackdropImageTags?.[0] || item.ImageTags?.Backdrop
+        : item.ImageTags?.Backdrop;
+    if (ownTag && item.Id) {
+        return { itemId: item.Id, tag: ownTag };
+    }
+
+    const parentTag = useLegacyEmbyFields ? item.ParentBackdropImageTags?.[0] : null;
+    const parentId = item.ParentBackdropItemId || item.SeriesId;
+    if (parentTag && parentId) {
+        return { itemId: parentId, tag: parentTag };
+    }
+
+    return null;
+}
+
 class HeroCarousel {
     constructor(options = {}) {
         this._items = options.items || [];
@@ -85,14 +112,15 @@ class HeroCarousel {
                     <div class="hero-carousel-track">
                         ${itemsHtml}
                     </div>
-                    ${this._items.length > 1
-                ? `
+                    ${
+                        this._items.length > 1
+                            ? `
                     <div class="hero-indicators">
                         ${dotsHtml}
                     </div>
                     `
-                : ''
-            }
+                            : ''
+                    }
                 </div>
                 ${navArrowsHtml}
             </div>
@@ -109,11 +137,14 @@ class HeroCarousel {
         // Get optimized image parameters from ImageService based on style
         const params = imageService.getParams(`hero-${carouselStyle}`);
 
-        const backdropUrl = api.getImageUrl(item.Id, 'Backdrop', {
-            maxWidth: params.maxWidth,
-            quality: params.quality,
-            tag: item.ImageTags?.Backdrop
-        });
+        const backdrop = resolveHeroBackdrop(item, api.isEmby47());
+        const backdropUrl = backdrop
+            ? api.getImageUrl(backdrop.itemId, 'Backdrop', {
+                  maxWidth: params.maxWidth,
+                  quality: params.quality,
+                  tag: backdrop.tag
+              })
+            : '';
 
         // Get Logo URL (prefer Logo, then ParentLogo)
         const logoTag = item.ImageTags?.Logo || item.ParentLogoImageTag;
@@ -178,9 +209,12 @@ class HeroCarousel {
             }
         }
 
+        const backdropData = backdropUrl ? ` data-backdrop="${backdropUrl}"` : '';
+        const backdropStyle = isActive && backdropUrl ? ` style="background-image: url('${backdropUrl}')"` : '';
+
         return `
             <div class="hero-item ${isActive ? 'active' : ''}" data-index="${index}"${!isActive ? ' style="visibility:hidden"' : ''}>
-                <div class="hero-backdrop" data-backdrop="${backdropUrl}" style="background-image: url('${backdropUrl}')">
+                <div class="hero-backdrop"${backdropData}${backdropStyle}>
                     ${blurHash ? `<canvas class="hero-blurhash-canvas" data-blurhash="${blurHash}" style="position: absolute; top: 0; left: 0; width: 100%; height: 100%; object-fit: cover; transition: opacity 500ms ease-out; z-index: 0; pointer-events: none; opacity: 1;"></canvas>` : ''}
                 </div>
                 <div class="hero-content">
