@@ -148,12 +148,12 @@ export function resolveBestAudioStream(mediaSource, targetLang) {
         return null;
     }
 
-    // Identify standard default track from container or Jellyfin metadata
+    // Prefer the server-resolved selection before the container disposition.
     const standardDefaultTrack =
-        audioStreams.find((s) => s.IsDefault) ||
         (mediaSource.DefaultAudioStreamIndex !== undefined && mediaSource.DefaultAudioStreamIndex !== null
             ? audioStreams.find((s) => s.Index === mediaSource.DefaultAudioStreamIndex)
             : null) ||
+        audioStreams.find((s) => s.IsDefault) ||
         audioStreams[0];
 
     // Codec fidelity tier scoring (higher is preferred for direct play)
@@ -1204,8 +1204,9 @@ export class JellyfinPlayer extends EventEmitter {
                         }
                     } else {
                         const prefLang = storage.getItem('pref:subtitleLang') || 'none';
-                        const defaultAudioStream = (ms.MediaStreams || []).find(s => s.Type === 'Audio' && s.IsDefault) ||
-                            (ms.MediaStreams || []).find(s => s.Type === 'Audio' && s.Index === ms.DefaultAudioStreamIndex) ||
+                        const defaultAudioStream =
+                            (ms.MediaStreams || []).find(s => s.Type === 'Audio' && ms.DefaultAudioStreamIndex !== undefined && ms.DefaultAudioStreamIndex !== null && s.Index === ms.DefaultAudioStreamIndex) ||
+                            (ms.MediaStreams || []).find(s => s.Type === 'Audio' && s.IsDefault) ||
                             (ms.MediaStreams || []).find(s => s.Type === 'Audio');
                         const audioStreamIndex = options.audioStreamIndex !== undefined && options.audioStreamIndex !== null ? options.audioStreamIndex : defaultAudioStream?.Index;
                         const audioStream = ms.MediaStreams.find(s => s.Type === 'Audio' && s.Index === audioStreamIndex);
@@ -1548,22 +1549,30 @@ export class JellyfinPlayer extends EventEmitter {
             this._currentAudioStreamIndex = options.audioStreamIndex;
             this._currentSubtitleStreamIndex = options.subtitleStreamIndex;
 
-            // If not provided, resolve best DirectPlay audio track from MediaSource
+            // If not provided, resolve the best DirectPlay audio track. The resolver
+            // prioritizes the server-selected default before container disposition.
             if (this._currentAudioStreamIndex === undefined && mediaSource.MediaStreams) {
                 const bestStream = resolveBestAudioStream(mediaSource);
                 if (bestStream) {
                     this._currentAudioStreamIndex = bestStream.Index;
                 } else {
                     const audioStream =
+                        (mediaSource.DefaultAudioStreamIndex !== undefined && mediaSource.DefaultAudioStreamIndex !== null
+                            ? mediaSource.MediaStreams.find((s) => s.Type === 'Audio' && s.Index === mediaSource.DefaultAudioStreamIndex)
+                            : null) ||
                         mediaSource.MediaStreams.find((s) => s.Type === 'Audio' && s.IsDefault) ||
                         mediaSource.MediaStreams.find((s) => s.Type === 'Audio');
                     if (audioStream) this._currentAudioStreamIndex = audioStream.Index;
                 }
             }
 
-            // If not provided (and not resolved pre-flight), subtitles default to off
+            // If not provided (and not resolved pre-flight), subtitles default to server preference or off
             if (this._currentSubtitleStreamIndex === undefined) {
-                this._currentSubtitleStreamIndex = -1;
+                if (mediaSource.DefaultSubtitleStreamIndex !== undefined && mediaSource.DefaultSubtitleStreamIndex !== null) {
+                    this._currentSubtitleStreamIndex = mediaSource.DefaultSubtitleStreamIndex;
+                } else {
+                    this._currentSubtitleStreamIndex = -1;
+                }
             }
 
             // -------------------------------------------------------------------------

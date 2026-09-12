@@ -1197,12 +1197,14 @@ class PlayerPage extends Page {
             // Filter candidate streams to Audio type
             const audioStreams = mediaSource?.MediaStreams?.filter((s) => s.Type === 'Audio') || [];
 
-            // Attempt best direct play match first, falling back to disposition default
-            const resolvedAudioStream = resolveBestAudioStream(mediaSource) ||
-                audioStreams.find((s) => s.IsDefault) ||
+            // Prefer the best direct-play track, then the server-resolved default,
+            // container disposition default, and finally the first audio track.
+            const resolvedAudioStream =
+                resolveBestAudioStream(mediaSource) ||
                 (mediaSource?.DefaultAudioStreamIndex !== undefined && mediaSource?.DefaultAudioStreamIndex !== null
                     ? audioStreams.find((s) => s.Index === mediaSource.DefaultAudioStreamIndex)
                     : null) ||
+                audioStreams.find((s) => s.IsDefault) ||
                 audioStreams[0];
 
             // Assign resolved index
@@ -2634,32 +2636,28 @@ class PlayerPage extends Page {
     _onMediaStreamsChange(data) {
         if (!this._item || !this._player) return;
 
-        // =====================================================================
-        // Immediate Track Selection Persistence
-        // =====================================================================
-        // Whenever the user changes the audio or subtitle track inside the player
-        // (via OSD TrackMenu or remote shortcuts), immediately persist the selection
-        // both per-item and in session memory. This guarantees the track is remembered
-        // even if playback is stopped abruptly or early in playback.
-        // =====================================================================
+        // Persist the local selection immediately, even if playback stops early.
         this._captureActiveTrackSelection();
 
-        // Skip reporting during initial setup (first 2 seconds of play time) to avoid CPU contention.
-        // Tizen hardware is under heavy load during ABR jumps at startup, and building the
-        // full NowPlayingQueue for progress reporting can trigger stutters.
-        const currentTicks = this._player.getCurrentPositionTicks();
-        const startPositionTicks = this._player.getStartPositionTicks?.() || 0;
-        const watchTimeTicks = currentTicks - startPositionTicks;
-
-        if (watchTimeTicks < 20000000) {
-            // 2 seconds
-            log.info('Skipping early progress report during startup stabilization');
+        // Do not report the player's own initial track setup as a user change.
+        // Once setup is complete, user and remote changes report immediately.
+        if (this._player._playSetupInProgress) {
+            log.info('Skipping stream change report during initial playback setup');
             return;
         }
 
-        log.info('Media streams changed, reporting progress to persist selection');
-        const isPaused = this._player.isPaused();
-        this._reportPlaybackProgress(isPaused ? 'pause' : 'timeupdate');
+        // Determine explicit track change event name.
+        // Emby specifically requires EventName: "SubtitleTrackChange" or "AudioTrackChange"
+        // to persist the track selection to the database for future sessions.
+        let eventName = 'TimeUpdate';
+        if (data?.subtitleStreamIndex !== undefined) {
+            eventName = 'SubtitleTrackChange';
+        } else if (data?.audioStreamIndex !== undefined) {
+            eventName = 'AudioTrackChange';
+        }
+
+        log.info(`Media streams changed (${eventName}), reporting progress to persist selection`, data);
+        this._reportPlaybackProgress(eventName, null, data);
     }
 
     /**
@@ -2740,10 +2738,11 @@ class PlayerPage extends Page {
 
     /**
      * Report playback progress to server
-     * @param {string} eventName - Event type: 'timeupdate', 'pause', 'unpause'
+     * @param {string} eventName - Event type: 'TimeUpdate', 'Pause', 'Unpause', 'AudioTrackChange', 'SubtitleTrackChange'
      * @param {number} [manualPositionTicks=null] - Optional manual position override
+     * @param {Object} [streamOverrides=null] - Optional stream index overrides from stream change event
      */
-    async _reportPlaybackProgress(eventName = 'timeupdate', manualPositionTicks = null) {
+    async _reportPlaybackProgress(eventName = 'TimeUpdate', manualPositionTicks = null, streamOverrides = null) {
         if (!this._player || !this._item) return;
 
         // Skip reporting progress completely if running in private/ghost mode
@@ -2756,16 +2755,31 @@ class PlayerPage extends Page {
             return;
         }
 
-        if (eventName === 'pause') {
+        // Canonical EventName mapping for Jellyfin and Emby API compliance
+        const eventNameMap = {
+            timeupdate: 'TimeUpdate',
+            pause: 'Pause',
+            unpause: 'Unpause',
+            volumechange: 'VolumeChange',
+            audiotrackchange: 'AudioTrackChange',
+            subtitletrackchange: 'SubtitleTrackChange'
+        };
+        const normalizedEventName = eventNameMap[String(eventName).toLowerCase()] || eventName;
+
+        let isPaused;
+        if (normalizedEventName === 'Pause') {
             this._isPaused = true;
-        } else if (eventName === 'unpause') {
+            isPaused = true;
+        } else if (normalizedEventName === 'Unpause') {
             this._isPaused = false;
+            isPaused = false;
+        } else {
+            isPaused = Boolean(this._player?.isPaused?.() ?? this._isPaused);
         }
 
         try {
             const mediaSource = this._player.getCurrentMediaSource();
-            const playerState = this._getPlayerState(manualPositionTicks);
-            const isPaused = eventName === 'pause';
+            const playerState = this._getPlayerState(manualPositionTicks, streamOverrides);
 
             const playSessionId = mediaSource?.PlaySessionId || mediaSource?.LiveStreamId;
 
@@ -2780,16 +2794,16 @@ class PlayerPage extends Page {
                 MediaSourceId: mediaSource?.Id,
                 ...playerState,
                 IsPaused: isPaused,
-                EventName: eventName,
+                EventName: normalizedEventName,
 
                 // Report the current queue state so the dashboard can reflect what's
                 // up next and remote control queue operations work correctly.
                 NowPlayingQueue: this._buildNowPlayingQueue()
             };
 
-            // Debug: Log progress reports for pause/unpause events
-            if (eventName !== 'timeupdate') {
-                log.info(`Reporting ${eventName}, IsPaused:`, isPaused);
+            // Debug: Log progress reports for non-timeupdate events
+            if (normalizedEventName !== 'TimeUpdate') {
+                log.info(`Reporting ${normalizedEventName}, IsPaused: ${isPaused}, Audio: ${info.AudioStreamIndex}, Subtitle: ${info.SubtitleStreamIndex}`);
             }
 
             await api.reportPlaybackProgress(info);
@@ -2802,9 +2816,10 @@ class PlayerPage extends Page {
      * Get comprehensive player state for reporting
      * Aligned with jellyfin-web's PlayState structure
      * @param {number} [manualPositionTicks=null] - Optional manual position override
+     * @param {Object} [streamOverrides=null] - Optional stream index overrides from stream change event
      * @returns {Object} Player state object
      */
-    _getPlayerState(manualPositionTicks = null) {
+    _getPlayerState(manualPositionTicks = null, streamOverrides = null) {
         const mediaSource = this._player?.getCurrentMediaSource?.();
         const positionTicks =
             manualPositionTicks !== null && manualPositionTicks !== undefined
@@ -2851,12 +2866,16 @@ class PlayerPage extends Page {
         };
 
         // Only include stream indices if they are valid numbers (strings or undefined cause 400 errors)
-        const audioIndex = Number(this._player?.getCurrentAudioStreamIndex?.());
-        if (!isNaN(audioIndex) && audioIndex !== null) {
+        const audioIndex = streamOverrides?.audioStreamIndex !== undefined
+            ? Number(streamOverrides.audioStreamIndex)
+            : Number(this._player?.getCurrentAudioStreamIndex?.());
+        if (!isNaN(audioIndex) && audioIndex !== null && audioIndex >= 0) {
             state.AudioStreamIndex = audioIndex;
         }
 
-        const subtitleIndex = Number(this._player?.getCurrentSubtitleStreamIndex?.());
+        const subtitleIndex = streamOverrides?.subtitleStreamIndex !== undefined
+            ? Number(streamOverrides.subtitleStreamIndex)
+            : Number(this._player?.getCurrentSubtitleStreamIndex?.());
         if (!isNaN(subtitleIndex) && subtitleIndex !== null) {
             state.SubtitleStreamIndex = subtitleIndex;
         }
