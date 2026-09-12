@@ -30,37 +30,31 @@ function loadMediaHelper(serverInfo = { ServerName: 'Emby', Version: '4.7.14.0' 
 
 const resolveHeroBackdrop = loadHeroBackdropResolver();
 
-test('hero uses standard Emby BackdropImageTags when legacy Emby mode is enabled', () => {
-    const resolved = resolveHeroBackdrop(
-        {
-            Id: 'movie',
-            BackdropImageTags: ['emby-tag'],
-            ImageTags: { Backdrop: 'plugin-tag' }
-        },
-        true
-    );
+test('hero uses standard BackdropImageTags and preserves plugin fallback', () => {
+    const resolved = resolveHeroBackdrop({
+        Id: 'movie',
+        BackdropImageTags: ['emby-tag'],
+        ImageTags: { Backdrop: 'plugin-tag' }
+    });
     assert.equal(resolved.itemId, 'movie');
     assert.equal(resolved.tag, 'emby-tag');
-});
 
-test('hero supports inherited Emby backdrops and plugin fallback', () => {
-    const inherited = resolveHeroBackdrop(
-        {
-            Id: 'episode',
-            SeriesId: 'series',
-            ParentBackdropItemId: 'parent',
-            ParentBackdropImageTags: ['parent-tag']
-        },
-        true
-    );
+    const inherited = resolveHeroBackdrop({
+        Id: 'episode',
+        SeriesId: 'series',
+        ParentBackdropItemId: 'parent',
+        ParentBackdropImageTags: ['parent-tag']
+    });
     assert.equal(inherited.itemId, 'parent');
     assert.equal(inherited.tag, 'parent-tag');
 
     const pluginFallback = resolveHeroBackdrop({ Id: 'movie', ImageTags: { Backdrop: 'plugin-tag' } });
     assert.equal(pluginFallback.itemId, 'movie');
     assert.equal(pluginFallback.tag, 'plugin-tag');
-    assert.equal(resolveHeroBackdrop({ Id: 'no-image' }), null);
-    assert.equal(resolveHeroBackdrop({ Id: 'modern', BackdropImageTags: ['legacy-only'] }), null);
+
+    const noTag = resolveHeroBackdrop({ Id: 'movie-no-tag' });
+    assert.equal(noTag.itemId, 'movie-no-tag');
+    assert.equal(noTag.tag, undefined);
 });
 
 test('Emby 4.7 direct playback uses DirectStreamUrl (e.g. original.mkv)', () => {
