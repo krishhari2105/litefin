@@ -108,6 +108,21 @@ export class ApiClient {
         return !!(info.ServerName && (!info.ProductName || info.ProductName.toLowerCase().includes('emby')));
     }
 
+    /**
+     * Check whether the connected server is specifically Emby 4.7.x.
+     * Compatibility workarounds must use this instead of affecting Jellyfin
+     * or newer Emby releases.
+     *
+     * @returns {boolean}
+     */
+    isEmby47() {
+        if (!this.isEmby()) return false;
+
+        const version = String(state.get('server:info')?.Version || '');
+        const [major, minor] = version.split('.').map((part) => parseInt(part, 10));
+        return major === 4 && minor === 7;
+    }
+
     // ========================================================================
     // Configuration Methods
     // ========================================================================
@@ -285,8 +300,8 @@ export class ApiClient {
             const endsWithSingleItemId = /\/[0-9a-f]{32}$/i.test(endpoint.replace(/\?.*$/, ''));
 
             const isItemsEndpoint =
-                !endsWithSingleItemId && (
-                    (endpoint.includes('/Items') && !endpoint.includes('/Items/Thumbnails')) ||
+                !endsWithSingleItemId &&
+                ((endpoint.includes('/Items') && !endpoint.includes('/Items/Thumbnails')) ||
                     endpoint.includes('/Latest') ||
                     endpoint.includes('/Resume') ||
                     endpoint.includes('/NextUp') ||
@@ -295,8 +310,7 @@ export class ApiClient {
                     endpoint.includes('/Episodes') ||
                     endpoint.includes('/Search/Hints') ||
                     endpoint.includes('/Persons') ||
-                    endpoint.includes('/MergedRows')
-                );
+                    endpoint.includes('/MergedRows'));
 
             if (isItemsEndpoint) {
                 const targetKey = fieldsKey || 'Fields';
@@ -492,11 +506,15 @@ export class ApiClient {
                 const wolMac = storage.getItem('pref:wolMacAddress');
 
                 if (wolTimeoutEnabled && wolMac && !options._isWolTimeoutRetry) {
-                    log.info(`Request failed/timed out. Wake-on-LAN on timeout active. Broadcasting packet to ${wolMac}...`);
+                    log.info(
+                        `Request failed/timed out. Wake-on-LAN on timeout active. Broadcasting packet to ${wolMac}...`
+                    );
 
                     try {
                         // Send Wake-on-LAN Magic Packet
-                        sendWakeOnLan(wolMac).catch((wolErr) => log.warn('Failed to send WOL packet on timeout:', wolErr));
+                        sendWakeOnLan(wolMac).catch((wolErr) =>
+                            log.warn('Failed to send WOL packet on timeout:', wolErr)
+                        );
 
                         // Retry loop: probe server status every 3s (up to 25 attempts / ~90s if Extended Wait is active)
                         const extendedWait = storage.getItem('pref:enableWolExtendedWait') === 'true';
@@ -517,10 +535,16 @@ export class ApiClient {
                                 if (testRes.ok) {
                                     log.info('Server responded to status probe! Re-executing failed API request...');
                                     // Re-run original request with _isWolTimeoutRetry flag set to prevent recursion loops
-                                    return await this.request(endpoint, { ...options, _isWolTimeoutRetry: true }, isRetry);
+                                    return await this.request(
+                                        endpoint,
+                                        { ...options, _isWolTimeoutRetry: true },
+                                        isRetry
+                                    );
                                 }
                             } catch (probeErr) {
-                                log.debug(`Server status probe ${attempt}/${maxAttempts} failed — server still booting...`);
+                                log.debug(
+                                    `Server status probe ${attempt}/${maxAttempts} failed — server still booting...`
+                                );
                             }
                         }
                     } catch (wolCycleErr) {
@@ -968,10 +992,14 @@ export class ApiClient {
         if (!isAvailable) return null;
 
         try {
-            return await this.get('/Litefin/Items/Latest', {
-                parentIds: parentIds.join(','),
-                ...params
-            }, { warnOnError: true });
+            return await this.get(
+                '/Litefin/Items/Latest',
+                {
+                    parentIds: parentIds.join(','),
+                    ...params
+                },
+                { warnOnError: true }
+            );
         } catch (e) {
             return null;
         }
@@ -990,9 +1018,13 @@ export class ApiClient {
         if (!isAvailable) return null;
 
         try {
-            return await this.get('/Litefin/Items/Thumbnails', {
-                parentIds: parentIds.join(',')
-            }, { warnOnError: true });
+            return await this.get(
+                '/Litefin/Items/Thumbnails',
+                {
+                    parentIds: parentIds.join(',')
+                },
+                { warnOnError: true }
+            );
         } catch (e) {
             return null;
         }
@@ -2762,7 +2794,10 @@ export async function sendWakeOnLan(macAddress) {
                     return true;
                 }
             } catch (fetchErr) {
-                log.warn(`WOL request to local HTTP proxy attempt ${attempt}/${maxHttpRetries} failed (service cold-booting):`, fetchErr.message || fetchErr);
+                log.warn(
+                    `WOL request to local HTTP proxy attempt ${attempt}/${maxHttpRetries} failed (service cold-booting):`,
+                    fetchErr.message || fetchErr
+                );
                 if (attempt < maxHttpRetries) {
                     await new Promise((resolve) => setTimeout(resolve, httpRetryDelayMs));
                 }
@@ -2816,9 +2851,10 @@ export function hasBackgroundDiscoveryService() {
 export async function discoverServers(onProgress = null, onServerFound = null, options = {}) {
     // Parse options object or boolean flag for backwards compatibility
     const isManual = typeof options === 'object' && options !== null ? !!options.isManual : false;
-    const allowHttpFallback = typeof options === 'object' && options !== null && 'allowHttpFallback' in options
-        ? !!options.allowHttpFallback
-        : isManual;
+    const allowHttpFallback =
+        typeof options === 'object' && options !== null && 'allowHttpFallback' in options
+            ? !!options.allowHttpFallback
+            : isManual;
 
     // Cancel any existing scan first
     cancelDiscovery();
