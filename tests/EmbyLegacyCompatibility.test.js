@@ -145,3 +145,22 @@ test('compatibility detection is strictly limited to Emby 4.7.x', () => {
     assert.match(source, /isEmby47\(\) \{/);
     assert.match(source, /return major === 4 && minor === 7/);
 });
+
+test('media stream change emits SubtitleTrackChange and AudioTrackChange events with overrides', () => {
+    const source = readFileSync(new URL('../src/pages/PlayerPage.js', import.meta.url), 'utf8');
+    assert.match(source, /eventName = 'SubtitleTrackChange'/);
+    assert.match(source, /eventName = 'AudioTrackChange'/);
+    assert.match(source, /this\._reportPlaybackProgress\(eventName, null, data\)/);
+    // Verifies 2-second stabilization suppression was removed for user track switches
+    assert.doesNotMatch(source, /watchTimeTicks < 20000000/);
+    assert.match(source, /audiotrackchange: 'AudioTrackChange'/);
+    assert.match(source, /subtitletrackchange: 'SubtitleTrackChange'/);
+});
+
+test('default audio stream resolution prioritizes server DefaultAudioStreamIndex over container disposition', () => {
+    const source = readFileSync(new URL('../src/pages/PlayerPage.js', import.meta.url), 'utf8');
+    const playerSource = readFileSync(new URL('../src/player/core/JellyfinPlayer.js', import.meta.url), 'utf8');
+
+    assert.match(source, /mediaSource\?\.DefaultAudioStreamIndex !== undefined[\s\S]*\? audioStreams\.find\(\(s\) => s\.Index === mediaSource\.DefaultAudioStreamIndex\)[\s\S]*: null\)\s*\|\|\s*audioStreams\.find\(\(s\) => s\.IsDefault\)/);
+    assert.match(playerSource, /mediaSource\.DefaultAudioStreamIndex !== undefined[\s\S]*\? mediaSource\.MediaStreams\.find\(\(s\) => s\.Type === 'Audio' && s\.Index === mediaSource\.DefaultAudioStreamIndex\)[\s\S]*: null\)\s*\|\|\s*mediaSource\.MediaStreams\.find\(\(s\) => s\.Type === 'Audio' && s\.IsDefault\)/);
+});
