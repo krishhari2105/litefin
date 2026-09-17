@@ -1,0 +1,27 @@
+name: Trigger Litefin Builds
+
+on:
+  push:
+    branches:
+      - litefin-emby-compatiblity
+
+jobs:
+  dispatch:
+    name: Dispatch Build Event
+    runs-on: ubuntu-latest
+    steps:
+      - name: Trigger Build in litefin-builds
+        run: |
+          if [ -z "${GH_TOKEN}" ]; then
+            echo "::warning::LITEFIN_BUILDS_PAT secret is not set. Instant dispatch skipped. (The litefin-builds cron schedule will pick up this commit automatically)."
+            exit 0
+          fi
+
+          echo "Dispatching build event to krishhari2105/litefin-builds..."
+          gh api repos/krishhari2105/litefin-builds/dispatches \
+            -f event_type=litefin-fork-push \
+            -f 'client_payload[branch]=${{ github.ref_name }}' \
+            -f 'client_payload[commit]=${{ github.sha }}'
+          echo "Dispatch event successfully sent!"
+        env:
+          GH_TOKEN: ${{ secrets.LITEFIN_BUILDS_PAT }}
